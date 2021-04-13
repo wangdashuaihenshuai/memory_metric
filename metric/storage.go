@@ -6,6 +6,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/wangdashuaihenshuai/memory_metric/state"
 )
 
 func newPoint(tags Tags, value int64) Point {
@@ -57,6 +59,7 @@ type MetricOptions struct {
 }
 
 type metricStorage struct {
+	state.StateMachine
 	key             string
 	maxPointNumber  int64
 	maxMetricNumber int64
@@ -65,7 +68,11 @@ type metricStorage struct {
 }
 
 func (s *metricStorage) Store(metricName string, point Point) {
-	ts := s.GetOrCreateKeyValue(metricName)
+	ts, ok := s.GetOrCreateKeyValue(metricName)
+	if !ok {
+		return
+	}
+
 	ts.Store(point)
 }
 
@@ -100,28 +107,33 @@ func (s *metricStorage) GetValue(key string) (*aggregationStorage, bool) {
 	return nil, false
 }
 
-func (s *metricStorage) GetOrCreateKeyValue(key string) *aggregationStorage {
+func (s *metricStorage) GetOrCreateKeyValue(key string) (*aggregationStorage, bool) {
 	s.lock.RLock()
 	v, ok := s.aggregationMap[key]
 	s.lock.RUnlock()
 	if ok {
-		return v
+		return v, true
+	}
+
+	if s.IsState(state.EndState) {
+		return nil, false
 	}
 
 	s.lock.Lock()
 	defer s.lock.Unlock()
 	v, ok = s.aggregationMap[key]
 	if ok {
-		return v
+		return v, true
 	}
 
 	if len(s.aggregationMap) > int(s.maxMetricNumber) {
-		//TODO
+		s.SetState(state.EndState)
+		return nil, false
 	}
 
 	v = newAggregationStoreage(s.maxPointNumber)
 	s.aggregationMap[key] = v
-	return v
+	return v, true
 }
 
 func NewPoint() Point {
@@ -130,6 +142,7 @@ func NewPoint() Point {
 
 func newMetricStorage(key string, maxMetricNumber int64, maxPointNumber int64) *metricStorage {
 	return &metricStorage{
+		StateMachine:    *state.NewStateMachine(),
 		key:             key,
 		maxPointNumber:  maxPointNumber,
 		maxMetricNumber: maxMetricNumber,
@@ -237,6 +250,7 @@ func (ts *storage) GetOrCreateKeyValue(key string) *metricStorage {
 
 func newAggregationStoreage(maxPointNumber int64) *aggregationStorage {
 	return &aggregationStorage{
+		StateMachine:   *state.NewStateMachine(),
 		maxPointNumber: maxPointNumber,
 		pointArray:     make([]Point, 0, maxPointNumber),
 		pointMap:       make(map[string]Point, maxPointNumber),
@@ -244,7 +258,7 @@ func newAggregationStoreage(maxPointNumber int64) *aggregationStorage {
 }
 
 type aggregationStorage struct {
-	key            string
+	state.StateMachine
 	maxPointNumber int64
 	pointMap       map[string]Point
 	pointArray     []Point
@@ -260,6 +274,10 @@ func (as *aggregationStorage) GetOrCreateKeyValue(key string, point Point) (Poin
 		return v, true
 	}
 
+	if as.IsState(state.EndState) {
+		return nil, false
+	}
+
 	as.lock.Lock()
 	defer as.lock.Unlock()
 	v, ok = as.pointMap[key]
@@ -268,7 +286,8 @@ func (as *aggregationStorage) GetOrCreateKeyValue(key string, point Point) (Poin
 	}
 
 	if as.pointNumber > as.maxPointNumber {
-		//TODO
+		as.SetState(state.EndState)
+		return nil, false
 	}
 
 	as.pointMap[key] = point

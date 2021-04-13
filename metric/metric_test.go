@@ -11,7 +11,7 @@ import (
 
 var opt = &metric.MetricOptions{
 	MaxTimeNumber:   2,
-	MaxPointNumber:  10000,
+	MaxPointNumber:  100,
 	MaxMetricNumber: 5,
 }
 
